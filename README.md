@@ -6,11 +6,12 @@ This CS 7265 project investigates whether popularity calibration in movie recomm
 
 | Path                             | Purpose                                                                       |
 | -------------------------------- | ----------------------------------------------------------------------------- |
-| `notebooks/als-baseline.ipynb` | Scala notebook for the local Spark environment check and planned ALS baseline |
+| `notebooks/als-baseline.ipynb` | Scala notebook for Spark setup, MovieLens rating loading, and the planned ALS baseline |
+| `data/ml-1m/` | Local MovieLens 1M dataset; excluded from version control |
 | `.gitignore`                   | Excludes local data, generated models, and runtime files from version control |
 | `.gitattributes`               | Keeps text-file line endings consistent                                       |
 
-The notebook currently implements the environment check only. Data loading, ALS training, recommendation generation, calibration, and evaluation are not implemented yet.
+The notebook implements the environment check, local MovieLens rating loading with a serializable parser, and a DataFrame schema and row preview. ALS training, recommendation generation, calibration, and evaluation are not implemented yet.
 
 ## Requirements
 
@@ -34,25 +35,37 @@ The notebook loads **Spark 3.5.9** through its dependency imports. The verified 
 2. Open the repository folder in your notebook editor.
 3. Open [`notebooks/als-baseline.ipynb`](notebooks/als-baseline.ipynb).
 4. Select a Scala 2.12.18 kernel using Java 17. The existing course kernel is named **CS 7265 - Scala 2.12.18**.
-5. Run the three code cells in order: load the libraries, start Spark and check the runtime, then stop the check session.
+5. Populate `data/ml-1m/` as described below. Run the code cells in order to load the libraries, start Spark, define the record and parser, load the ratings, and inspect the DataFrame. Run the final shutdown cell when Spark work is complete. The kernel working directory may be the repository root or its `notebooks` folder.
 
-The check uses three synthetic rows and does not require MovieLens. Successful output includes:
+The environment check uses three synthetic rows and does not require MovieLens. The subsequent loading section requires the local dataset. Successful environment-check output includes:
 
 ```text
 Spark: 3.5.9
 Scala: 2.12.18
 Java: 17.0.16
 Environment check passed: 3 synthetic rows.
-Environment-check session stopped.
 ```
 
 The Java patch version may differ within Java 17. Spark runs locally with two worker threads and uses loopback addresses for the driver. The final cell stops Spark; rerun the session cell before performing additional Spark work. Restart the notebook kernel and run the cells in order to repeat the check from a fresh session.
 
-Saved outputs show a previous successful environment check. They do not represent a trained recommender or experimental results.
+Saved outputs record an environment check and a schema and five-row data preview. The preview does not validate every record. No model is trained and no experimental results are reported.
 
 ## Dataset
 
 The planned recommender uses [MovieLens 1M](https://grouplens.org/datasets/movielens/1m/). Obtain it from GroupLens under the dataset's usage terms and retain the original files locally. Raw MovieLens data is not included in this repository.
+
+Place the extracted dataset files in `data/ml-1m/` at the repository root, retaining the dataset's `README` alongside the data:
+
+```text
+data/
+└── ml-1m/
+    ├── README
+    ├── ratings.dat
+    ├── movies.dat
+    └── users.dat
+```
+
+The `data/` directory is excluded from version control and must be populated locally after cloning the repository.
 
 `ratings.dat` contains records in this format:
 
@@ -60,4 +73,4 @@ The planned recommender uses [MovieLens 1M](https://grouplens.org/datasets/movie
 UserID::MovieID::Rating::Timestamp
 ```
 
-Dataset paths and training inputs are not connected to the notebook yet. The environment check can run independently of them.
+The notebook reads `ratings.dat` from this local directory. `movies.dat`, `users.dat`, and the dataset README are retained alongside it. Data loading does not create a training, validation, or test split.
