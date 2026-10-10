@@ -1,0 +1,29 @@
+# Local data and generated experiment files
+data/
+ml-1m-data/
+*.dat
+*.zip
+outputs/
+models/
+*.parquet
+
+# Spark and Scala runtime/build files
+spark-warehouse/
+metastore_db/
+derby.log
+artifacts/
+target/
+.bloop/
+.bsp/
+.metals/
+.ammonite/
+
+# Notebook checkpoints, local configuration, and credentials
+.ipynb_checkpoints/
+.env
+.env.*
+*.local.*
+.venv*/
+__pycache__/
+.DS_Store
+*.log
