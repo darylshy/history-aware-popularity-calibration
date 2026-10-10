@@ -4,14 +4,14 @@ This CS 7265 project investigates whether popularity calibration in movie recomm
 
 ## Repository contents
 
-| Path                             | Purpose                                                                                |
-| -------------------------------- | -------------------------------------------------------------------------------------- |
-| `notebooks/als-baseline.ipynb` | Scala notebook for Spark setup, MovieLens rating loading, and the planned ALS baseline |
-| `data/ml-1m/`                  | Local MovieLens 1M dataset; excluded from version control                              |
-| `.gitignore`                   | Excludes local data, generated models, and runtime files from version control          |
-| `.gitattributes`               | Keeps text-file line endings consistent                                                |
+| Path                             | Purpose                                                                                        |
+| -------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `notebooks/als-baseline.ipynb` | Scala notebook for Spark setup, MovieLens rating loading, splitting, and ALS baseline training |
+| `data/ml-1m/`                  | Local MovieLens 1M dataset; excluded from version control                                      |
+| `.gitignore`                   | Excludes local data, generated models, and runtime files from version control                  |
+| `.gitattributes`               | Keeps text-file line endings consistent                                                        |
 
-The notebook implements the environment check, local MovieLens rating loading with a serializable parser, a DataFrame schema and row preview, and checks of dataset counts, rating values, identifier ranges, duplicate user–movie pairs, per-user history counts, basic timestamp validity, and a reproducible per-user training/test split. ALS training, recommendation generation, calibration, and evaluation are not implemented yet.
+The notebook implements the environment check, local MovieLens rating loading with a serializable parser, a DataFrame schema and row preview, and checks of dataset counts, rating values, identifier ranges, duplicate user–movie pairs, per-user history counts, basic timestamp validity, and a reproducible per-user training/test split. It trains an explicit-feedback ALS baseline and inspects its learned user and movie profiles. Recommendation generation, calibration, and evaluation are not implemented yet.
 
 ## Requirements
 
@@ -35,7 +35,7 @@ The notebook loads **Spark 3.5.9** through its dependency imports. The verified 
 2. Open the repository folder in your notebook editor.
 3. Open [`notebooks/als-baseline.ipynb`](notebooks/als-baseline.ipynb).
 4. Select a Scala 2.12.18 kernel using Java 17. The existing course kernel is named **CS 7265 - Scala 2.12.18**.
-5. Populate `data/ml-1m/` as described below. Run the code cells in order to load the libraries, start Spark, define the record and parser, load the ratings, inspect the DataFrame, run the data-quality checks, and construct and verify the training/test split. Run the final shutdown cell when Spark work is complete. The kernel working directory may be the repository root or its `notebooks` folder.
+5. Populate `data/ml-1m/` as described below. Run the code cells in order to load the libraries, start Spark, define the record and parser, load the ratings, inspect the DataFrame, run the data-quality checks, construct and verify the training/test split, train ALS, and inspect the learned profiles. Run the final shutdown cell when Spark work is complete. The kernel working directory may be the repository root or its `notebooks` folder.
 
 The environment check uses three synthetic rows and does not require MovieLens. The subsequent loading section requires the local dataset. Successful environment-check output includes:
 
@@ -48,11 +48,11 @@ Environment check passed: 3 synthetic rows.
 
 The Java patch version may differ within Java 17. Spark runs locally with two worker threads and uses loopback addresses for the driver. The final cell stops Spark; rerun the session cell before performing additional Spark work. Restart the notebook kernel and run the cells in order to repeat the check from a fresh session.
 
-Saved outputs record the environment check, schema and five-row preview, and full-dataset checks of counts, rating values, identifier ranges, duplicate pairs, minimum user history, and missing or nonpositive timestamps. The earliest and latest timestamps are displayed in UTC.
+Saved outputs record the environment check, schema and five-row preview, and full-dataset checks of counts, rating values, identifier ranges, duplicate pairs, minimum user history, and missing or nonpositive timestamps. The earliest and latest timestamps are displayed in UTC. Outputs also record split checks, ALS training completion, profile counts, and previews of learned factors.
 
 ## Dataset
 
-The planned recommender uses [MovieLens 1M](https://grouplens.org/datasets/movielens/1m/). Obtain it from GroupLens under the dataset's usage terms and retain the original files locally. Raw MovieLens data is not included in this repository.
+The recommender uses [MovieLens 1M](https://grouplens.org/datasets/movielens/1m/). Obtain it from GroupLens under the dataset's usage terms and retain the original files locally. Raw MovieLens data is not included in this repository.
 
 Place the extracted dataset files in `data/ml-1m/` at the repository root, retaining the dataset's `README` alongside the data:
 
@@ -81,3 +81,9 @@ The notebook implements a pseudo-random 80/20 split within each user's rating hi
 
 The per-user choice is based on the [LensKit splitting guide](https://lenskit.org/stable/guide/splitting#user-based-splitting), which describes user-based holdouts as a way to control experimental conditions for individual users. The 80/20 proportion comes from the project proposal; seed `42` and the rounding rule are this project's implementation choices.
 The shuffle key is `xxhash64(splitSeed, userId, movieId)`, with the split seed supplied as a hash input. Within each user, ratings are ordered by that key and then movie ID to break ties. For the same input records and types, ordering is independent of input row order and Spark partitions. The notebook verifies that training and test do not overlap, reconstruct the original dataset exactly, and assign each user the intended number of training ratings.
+
+## ALS baseline configuration
+
+The notebook trains Spark's explicit-feedback ALS on `trainingRatings`, using `userId`, `movieId`, and `rating`. The proposal's fixed baseline settings are rank `50`, `maxIter = 10`, and `regParam = 0.1`. The named values `splitSeed = 42L` and `alsSeed = 42L` separately control the data split and ALS initialization. These settings have not been tuned on validation data.
+
+The fitted model exposes user and movie factor DataFrames. The notebook checks profile counts and dimensions and previews the first five values of selected 50-factor profiles. The model is held in the Spark session and is not exported to disk; after restarting the kernel, rerun the notebook to train it again.
