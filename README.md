@@ -11,7 +11,7 @@ This CS 7265 project investigates whether popularity calibration in movie recomm
 | `.gitignore`                   | Excludes local data, generated models, and runtime files from version control |
 | `.gitattributes`               | Keeps text-file line endings consistent                                       |
 
-The notebook implements the environment check, local MovieLens rating loading with a serializable parser, and a DataFrame schema and row preview. ALS training, recommendation generation, calibration, and evaluation are not implemented yet.
+The notebook implements the environment check, local MovieLens rating loading with a serializable parser, a DataFrame schema and row preview, and checks of dataset counts, rating values, identifier ranges, duplicate user–movie pairs, per-user history counts, and basic timestamp validity. ALS training, recommendation generation, calibration, and evaluation are not implemented yet.
 
 ## Requirements
 
@@ -35,7 +35,7 @@ The notebook loads **Spark 3.5.9** through its dependency imports. The verified 
 2. Open the repository folder in your notebook editor.
 3. Open [`notebooks/als-baseline.ipynb`](notebooks/als-baseline.ipynb).
 4. Select a Scala 2.12.18 kernel using Java 17. The existing course kernel is named **CS 7265 - Scala 2.12.18**.
-5. Populate `data/ml-1m/` as described below. Run the code cells in order to load the libraries, start Spark, define the record and parser, load the ratings, and inspect the DataFrame. Run the final shutdown cell when Spark work is complete. The kernel working directory may be the repository root or its `notebooks` folder.
+5. Populate `data/ml-1m/` as described below. Run the code cells in order to load the libraries, start Spark, define the record and parser, load the ratings, inspect the DataFrame, and run the data-quality checks. Run the final shutdown cell when Spark work is complete. The kernel working directory may be the repository root or its `notebooks` folder.
 
 The environment check uses three synthetic rows and does not require MovieLens. The subsequent loading section requires the local dataset. Successful environment-check output includes:
 
@@ -48,7 +48,7 @@ Environment check passed: 3 synthetic rows.
 
 The Java patch version may differ within Java 17. Spark runs locally with two worker threads and uses loopback addresses for the driver. The final cell stops Spark; rerun the session cell before performing additional Spark work. Restart the notebook kernel and run the cells in order to repeat the check from a fresh session.
 
-Saved outputs record an environment check and a schema and five-row data preview. The preview does not validate every record. No model is trained and no experimental results are reported.
+Saved outputs record the environment check, schema and five-row preview, and full-dataset checks of counts, rating values, identifier ranges, duplicate pairs, minimum user history, and missing or nonpositive timestamps. The earliest and latest timestamps are displayed in UTC. Identifier membership in the metadata files and the correctness of individual recorded dates are not verified. No model is trained and no experimental results are reported.
 
 ## Dataset
 
