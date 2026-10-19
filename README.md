@@ -7,11 +7,12 @@ This CS 7265 project investigates whether popularity calibration in movie recomm
 | Path                             | Purpose                                                                                                         |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `notebooks/als-baseline.ipynb` | Scala notebook for Spark setup, MovieLens rating loading, splitting, ALS training, and baseline recommendations |
+| `notebooks/upd-evaluation.ipynb` | UPD evaluation of prepared recommendation lists, with input validation and synthetic tests |
 | `data/ml-1m/`                  | Local MovieLens 1M dataset; excluded from version control                                                       |
 | `.gitignore`                   | Excludes local data, generated models, and runtime files from version control                                   |
 | `.gitattributes`               | Keeps text-file line endings consistent                                                                         |
 
-The notebook implements the environment check, local MovieLens rating loading with a serializable parser, a DataFrame schema and row preview, and checks of dataset counts, rating values, identifier ranges, duplicate user–movie pairs, per-user history counts, basic timestamp validity, and a reproducible per-user training/test split. It trains an explicit-feedback ALS baseline and inspects its learned user and movie profiles. It also produces and validates 100 candidates and 10 unadjusted recommendations per user. Calibration and evaluation are not implemented yet.
+The notebook implements the environment check, local MovieLens rating loading with a serializable parser, a DataFrame schema and row preview, and checks of dataset counts, rating values, identifier ranges, duplicate user–movie pairs, per-user history counts, basic timestamp validity, and a reproducible per-user training/test split. It trains an explicit-feedback ALS baseline and inspects its learned user and movie profiles. It also produces and validates 100 candidates and 10 unadjusted recommendations per user. The separate UPD notebook implements popularity-alignment evaluation and tests it with synthetic inputs. Real-data UPD results require the prepared profiles and category assignments described below. Calibration and relevance evaluation are not implemented here.
 
 ## Requirements
 
@@ -31,7 +32,6 @@ The notebook loads **Spark 3.5.9** through its dependency imports. The verified 
    cd history-aware-popularity-calibration
    ```
 
-   Access to the private repository is required.
 2. Open the repository folder in your notebook editor.
 3. Open [`notebooks/als-baseline.ipynb`](notebooks/als-baseline.ipynb).
 4. Select a Scala 2.12.18 kernel using Java 17. The existing course kernel is named **CS 7265 - Scala 2.12.18**.
@@ -114,3 +114,29 @@ val candidates = spark.read.parquet("/path/to/run/top-100-candidates")
 val baseline = spark.read.parquet("/path/to/run/top-10-baseline")
 baseline.orderBy("userId", "recommendationRank").show(10, truncate = false)
 ```
+
+## UPD evaluation
+
+Open [`notebooks/upd-evaluation.ipynb`](notebooks/upd-evaluation.ipynb) with the same Scala kernel and run its cells in order. It starts its own Spark session, validates the individual Jensen–Shannon calculation, verifies segment aggregation, runs a complete synthetic evaluation, checks invalid-input rejection, and stops Spark. It does not require ALS retraining or the baseline notebook's live session. All saved evaluation results are synthetic, not measured baseline or calibration results.
+
+UPD compares each user's historical Head/Mid/Tail mix with the category proportions in their recommendations. Historical proportions are weighted by observed training-rating values; recommendations use movie counts. The implementation uses base-2 logarithms and reports Jensen–Shannon divergence (not its square root), giving individual scores a theoretical range of 0–1. Lower scores indicate closer popularity alignment. Overall UPD is the equally weighted mean of the three user-segment means, following [the paper's Section 3.1.2](https://arxiv.org/html/2103.06364#S3.SS1.SSS2). Relevance is evaluated separately.
+
+### Required inputs for real evaluation
+
+`evaluateUPD(profiles, movieGroups, recommendations, segments, expectedUsers)` accepts Spark DataFrames with the following columns and types:
+
+| Input | Required columns |
+|---|---|
+| Historical profiles | `userId: Int`, `head: Double`, `mid: Double`, `tail: Double` |
+| Movie popularity groups | `movieId: Int`, `popularityGroup: String` containing `H`, `M`, or `T` |
+| Final recommendation lists | `userId: Int`, `movieId: Int`; exactly 10 distinct movies per user by default |
+| User segments | `userId: Int`, `segment: String` containing `blockbuster-focused`, `diverse`, or `niche-focused` |
+| Expected evaluation users | `userId: Int`, one row per intended user, specified independently of recommendation outputs |
+
+Historical profiles and movie popularity groups must be derived from training data only. All inputs must use the same identifiers and split as the recommendation run. The baseline cohort is all training users; it can be obtained from `trainingRatings.select("userId").distinct()` in the baseline session and saved for handoff. The evaluator cannot determine split provenance from table contents, so retain the split configuration/run identity with the files. It does not create popularity groups, historical profiles, or user segments.
+
+The evaluator checks schemas, nulls, valid proportions and labels, unique keys, exact user coverage, complete movie-label coverage, and list sizes before aggregation. Profiles, segments, and recommendation users must exactly match the expected cohort; a larger movie-category catalog is allowed. Every segment must be represented. A different list size may be passed explicitly as `listSize`; a top-100 candidate pool must not be substituted for a top-10 list.
+
+Load the existing `top-10-baseline/` Parquet directory as the recommendation input; its additional prediction, rank, and relevance columns are ignored. Section 9 of the UPD notebook shows the loading and evaluation call with placeholder paths. Adapt other file layouts explicitly to the documented columns. Prepared profile, category, segment, and cohort files are not bundled; until supplied, only the synthetic validation is available.
+
+The call returns `(userScores, segmentScores, overallScore)`. Per-user results retain both mixes, recommendation counts, segment labels, and mismatch scores. Segment results include counts and mean UPD; the overall table has one `overallUPD` value. For comparisons, run once per method and split while keeping profiles, categories, segments, cohort, and list size fixed. Save generated results under ignored `outputs/` with their method and split identity. No real-data results are generated automatically.
