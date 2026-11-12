@@ -7,12 +7,14 @@ This CS 7265 project investigates whether popularity calibration in movie recomm
 | Path                             | Purpose                                                                                                         |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `notebooks/als-baseline.ipynb` | Scala notebook for Spark setup, MovieLens rating loading, splitting, ALS training, and baseline recommendations |
+| `notebooks/history-aware-calibration.ipynb` | Applies fixed and history-aware popularity calibration and evaluates recommendation quality |
 | `notebooks/upd-evaluation.ipynb` | UPD evaluation of prepared recommendation lists, with input validation and synthetic tests |
+| `analysis/history_group_analysis.py` | Produces grouped result tables and plots from a calibration run's `results.csv` |
 | `data/ml-1m/`                  | Local MovieLens 1M dataset; excluded from version control                                                       |
 | `.gitignore`                   | Excludes local data, generated models, and runtime files from version control                                   |
 | `.gitattributes`               | Keeps text-file line endings consistent                                                                         |
 
-The notebook implements the environment check, local MovieLens rating loading with a serializable parser, a DataFrame schema and row preview, and checks of dataset counts, rating values, identifier ranges, duplicate user–movie pairs, per-user history counts, basic timestamp validity, and a reproducible per-user training/test split. It trains an explicit-feedback ALS baseline and inspects its learned user and movie profiles. It also produces and validates 100 candidates and 10 unadjusted recommendations per user. The separate UPD notebook implements popularity-alignment evaluation and tests it with synthetic inputs. Real-data UPD results require the prepared profiles and category assignments described below. Calibration and relevance evaluation are not implemented here.
+The baseline notebook implements the environment check, local MovieLens rating loading with a serializable parser, a DataFrame schema and row preview, and checks of dataset counts, rating values, identifier ranges, duplicate user–movie pairs, per-user history counts, basic timestamp validity, and a reproducible per-user training/test split. It trains an explicit-feedback ALS baseline and inspects its learned user and movie profiles. It also produces and validates 100 candidates and 10 unadjusted recommendations per user. The history-aware calibration notebook reuses those exports to create calibrated lists and evaluate them for popularity alignment and relevance. The separate UPD notebook implements the popularity-alignment evaluator and tests it with synthetic inputs; the calibration notebook also exports the prepared inputs needed to cross-check its real-data UPD results.
 
 ## Requirements
 
@@ -114,6 +116,44 @@ val candidates = spark.read.parquet("/path/to/run/top-100-candidates")
 val baseline = spark.read.parquet("/path/to/run/top-10-baseline")
 baseline.orderBy("userId", "recommendationRank").show(10, truncate = false)
 ```
+
+## History-aware calibration
+
+Run [`notebooks/history-aware-calibration.ipynb`](notebooks/history-aware-calibration.ipynb) after completing the ALS baseline notebook. It uses the same Scala 2.12.18 / Java 17 kernel and the local `data/ml-1m/ratings.dat` file. In its configuration cell, set `baselineRunId` to the timestamped folder name of the ALS run under `outputs/als-baseline/` whose candidate and baseline lists you want to calibrate. Run all cells in order from the repository root or `notebooks/`; the notebook rebuilds the baseline's training/test split and checks that it matches the exported candidates before calibration.
+
+The notebook derives movie popularity groups from training-rating counts: Head (`H`) contains movies up to the first 20% of rating volume, Tail (`T`) starts at 80%, and the remainder is Mid (`M`). For each user, it builds a Head/Mid/Tail profile using the shares of their training rating values. It also divides users into thirds by Head share (`blockbuster-focused`, `diverse`, `niche-focused`) and assigns history buckets by training-rating count: short is fewer than 50, medium is 50 through 200, and long is more than 200.
+
+Each list is selected greedily from the 100 ALS candidates by maximizing `(1 - lambda_u) * Rel(L) - lambda_u * JS(p(u), q(L))`, then presented in the original ALS order. Here `Rel(L)` is the sum of the candidates' scaled relevance scores, `p(u)` is the user's historical Head/Mid/Tail profile, and `q(L)` is the recommendation list's Head/Mid/Tail mix. `JS` is base-2 Jensen–Shannon divergence. Fixed Calibrated Popularity (CP) uses the configured `lambda` directly. History-aware calibration (HA) scales it by the user's training history, `lambda_u = lambda * min(1, n_u / N0)`. The default sweep uses `lambda` values `0.1`, `0.3`, `0.5`, `0.7`, and `0.9`; HA tests `N0` values `50`, `100`, and `200`. The `lambda = 0` baseline is included and checked against the exported baseline list.
+
+Results include UPD, Precision@10, Recall@10, and NDCG@10 for the full cohort, each history bucket, and each user segment. Precision, recall, and NDCG use held-out test ratings of at least 4 as relevant items and are averaged over users with at least one such item; `scoredUsers` in the output records that count. UPD compares each user's training profile with the Head/Mid/Tail proportions in their recommendations. The `all` row reports the equal-weight mean of the three segment-level UPD means; history and segment rows report their group's mean.
+
+Each run creates a new `outputs/calibration/<run-id>/` folder, preserving earlier runs. It contains:
+
+| Output | Contents |
+| --- | --- |
+| `results.csv` | Metrics for each method and setting across overall, history, and segment groups |
+| `top-10-<setting>/` | Parquet recommendation lists for each setting, including the baseline, CP, and HA |
+| `inputs/` | Parquet evaluator inputs: user profiles, movie popularity groups, user segments, evaluation users, and user history |
+
+Use the complete timestamped folder to retain the results, recommendation lists, evaluator inputs, baseline run identity, and split configuration together. Generated outputs are local and excluded from version control.
+
+## History-group analysis
+
+The Python script [`analysis/history_group_analysis.py`](analysis/history_group_analysis.py) reads the calibration notebook's `results.csv` and writes grouped tables and plots. It requires Python 3 with `pandas`, `numpy`, and `matplotlib` installed. From the repository root, pass the results file as the first argument:
+
+```bash
+.venv/bin/python analysis/history_group_analysis.py outputs/calibration/<run-id>/results.csv
+```
+
+Replace `<run-id>` with the timestamped calibration folder name. If the packages are not installed in `.venv`, install them with `.venv/bin/python -m pip install pandas numpy matplotlib`. If you do not use the repository's `.venv`, replace `.venv/bin/python` with your Python executable. An optional second argument selects the output directory; otherwise, outputs go in an `analysis/` directory next to `results.csv`:
+
+```bash
+.venv/bin/python analysis/history_group_analysis.py \
+  outputs/calibration/<run-id>/results.csv \
+  outputs/calibration/<run-id>/analysis
+```
+
+The script writes `all_settings_by_group.csv`, `ndcg_vs_upd.png`, and `matched_upd_comparison.csv`. When history-aware and CP curves have overlapping UPD ranges, it also writes `gain_by_history_bucket.csv` and `gain_by_history_bucket.png`. The matched-UPD table estimates the history-aware minus CP NDCG gain over their shared UPD range; positive values favor history-aware calibration at comparable popularity alignment.
 
 ## UPD evaluation
 
