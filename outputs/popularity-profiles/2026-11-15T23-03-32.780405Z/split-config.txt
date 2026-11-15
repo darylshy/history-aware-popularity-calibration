@@ -1,0 +1,8 @@
+splitSeed=42
+trainingFraction=0.8
+trainingRatings=797758
+testRatings=202451
+headShare=0.2
+tailShare=0.2
+historyBuckets=short<50;medium=50-200;long>200
+segments=ntile(3) by head share descending, ties by userId
