@@ -33,7 +33,9 @@ tbl = df[df.groupType.isin(["all", "history", "segment"])].copy()
 tbl.to_csv(os.path.join(out, "all_settings_by_group.csv"), index=False)
 
 # --- NDCG vs UPD curves ----------------------------------------------------
-fig, axes = plt.subplots(2, 3, figsize=(15, 8), sharex=False)
+fig, axes = plt.subplots((len(groups) + 2) // 3, 3, figsize=(15, 12), sharex=False)
+for ax in axes.ravel()[len(groups):]:
+    ax.set_visible(False)
 for ax, (gt, g) in zip(axes.ravel(), groups):
     d = df[(df.groupType == gt) & (df.group == g)]
     for fam in families:
