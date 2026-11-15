@@ -1,4 +1,5 @@
 import sys, os
+import math
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -33,11 +34,17 @@ tbl = df[df.groupType.isin(["all", "history", "segment"])].copy()
 tbl.to_csv(os.path.join(out, "all_settings_by_group.csv"), index=False)
 
 # --- NDCG vs UPD curves ----------------------------------------------------
-fig, axes = plt.subplots((len(groups) + 2) // 3, 3, figsize=(15, 12), sharex=False)
-for ax in axes.ravel()[len(groups):]:
-    ax.set_visible(False)
-for ax, (gt, g) in zip(axes.ravel(), groups):
+plot_columns = min(3, len(groups))
+plot_rows = math.ceil(len(groups) / plot_columns)
+fig, axes = plt.subplots(plot_rows, plot_columns,
+                         figsize=(5 * plot_columns, 4 * plot_rows), sharex=False)
+axes = np.asarray(axes).reshape(-1)
+plotted_groups = []
+for index, (gt, g) in enumerate(groups):
+    ax = axes[index]
     d = df[(df.groupType == gt) & (df.group == g)]
+    if d.empty:
+        raise ValueError(f"No rows found for requested plot group {gt}: {g}")
     for fam in families:
         sub = family(d, "cp" if fam == "cp" else fam.replace("ha ", ""))
         x, y = curve(sub)
@@ -46,7 +53,11 @@ for ax, (gt, g) in zip(axes.ravel(), groups):
     ax.set_xlabel("UPD (lower = better aligned)")
     ax.set_ylabel("NDCG@10")
     ax.grid(alpha=.3)
-axes[0, 0].legend()
+    plotted_groups.append((gt, g))
+assert plotted_groups == groups, "Every requested group must have a plot axis."
+for ax in axes[len(groups):]:
+    ax.set_visible(False)
+axes[0].legend()
 fig.suptitle("Relevance vs popularity alignment across the lambda sweep")
 fig.tight_layout()
 fig.savefig(os.path.join(out, "ndcg_vs_upd.png"), dpi=150)
