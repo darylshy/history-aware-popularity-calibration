@@ -48,17 +48,28 @@ def read_split_seed(results_path, run_index, total_runs):
                 entries[key] = value
         if "splitSeed" not in entries:
             raise ValueError(f"{manifest_path} does not record splitSeed.")
-        return entries["splitSeed"]
+        seed = entries["splitSeed"].strip()
+        if not seed.isdigit():
+            raise ValueError(f"{manifest_path} records splitSeed={entries['splitSeed']!r}, which is not an integer.")
+        return seed
     if total_runs == 1:
         return "single"
-    return f"input-{run_index + 1}"
+    raise ValueError(
+        f"{results_path}: no manifest.txt beside this results file, so its split seed is unknown. "
+        "Multi-run aggregation requires each results.csv to sit next to a manifest.txt that records splitSeed."
+    )
 
 
 def load_runs(paths):
     required = set(GROUP_KEYS) | set(METRICS)
     frames = []
     seen_seeds = set()
+    seen_paths = set()
     for index, path in enumerate(paths):
+        resolved = Path(path).resolve()
+        if resolved in seen_paths:
+            raise ValueError(f"{path} was provided more than once; provide each seed's results.csv exactly once.")
+        seen_paths.add(resolved)
         frame = pd.read_csv(path)
         missing = required - set(frame.columns)
         if missing:
