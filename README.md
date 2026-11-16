@@ -7,15 +7,20 @@ This CS 7265 project investigates whether popularity calibration in movie recomm
 | Path                             | Purpose                                                                                                         |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `notebooks/als-baseline.ipynb` | Scala notebook for Spark setup, MovieLens rating loading, splitting, ALS training, and baseline recommendations |
+| `notebooks/accuracy-evaluation.ipynb` | Loads an existing baseline export, rebuilds the test split, and evaluates P@10, R@10, and NDCG@10 |
+| `notebooks/als-tuning.ipynb` | Compares ALS rank and regularization grids using validation RMSE, Precision@10, and NDCG@10 |
+| `notebooks/accuracy-popularity-diagnostics.ipynb` | Supplementary popularity-decomposed and inverse-propensity-weighted test relevance diagnostics |
 | `notebooks/popularity-profiles.ipynb` | Rebuilds the training split and exports shared movie labels, user profiles, segments, and history buckets |
 | `notebooks/history-aware-calibration.ipynb` | Applies fixed and history-aware popularity calibration and evaluates recommendation quality |
 | `notebooks/upd-evaluation.ipynb` | UPD evaluation of prepared recommendation lists, with input validation and synthetic tests |
-| `analysis/history_group_analysis.py` | Produces grouped result tables and plots from a calibration run's `results.csv` |
+| `notebooks/baseline-upd-crosscheck.ipynb` | Independently cross-checks calibration UPD results against the validated evaluator |
+| `analysis/history_group_analysis.py` | Aggregates grouped results and matched-UPD gains across one or more split seeds |
+| `analysis/popularity_diversity_analysis.py` | Plots validation ARP and catalog coverage against UPD for CP and history-aware settings |
 | `data/ml-1m/`                  | Local MovieLens 1M dataset; excluded from version control                                                       |
 | `.gitignore`                   | Excludes local data, generated models, and runtime files from version control                                   |
 | `.gitattributes`               | Keeps text-file line endings consistent                                                                         |
 
-The baseline notebook implements the environment check, local MovieLens rating loading with a serializable parser, a DataFrame schema and row preview, and checks of dataset counts, rating values, identifier ranges, duplicate user–movie pairs, per-user history counts, basic timestamp validity, and a reproducible per-user training/test split. It trains an explicit-feedback ALS baseline and inspects its learned user and movie profiles. It also produces and validates 100 candidates and 10 unadjusted recommendations per user. The popularity-profiles notebook exports shared training-only labels and user profiles; the history-aware calibration notebook verifies those exports against the calibration split before using them to create calibrated lists and evaluate popularity alignment and relevance. The separate UPD notebook implements the popularity-alignment evaluator and tests it with synthetic inputs; the calibration notebook also exports the prepared inputs needed to cross-check its real-data UPD results.
+The baseline notebook implements the environment check, local MovieLens rating loading with a serializable parser, a DataFrame schema and row preview, and checks of dataset counts, rating values, identifier ranges, duplicate user–movie pairs, per-user history counts, basic timestamp validity, and a reproducible per-user training/test split. It trains an explicit-feedback ALS baseline and inspects its learned user and movie profiles. It also produces and validates 100 candidates and 10 unadjusted recommendations per user. The accuracy-evaluation notebook loads a selected existing baseline export and evaluates it against the rebuilt held-out test split without retraining or exporting; optional validation-based ALS tuning is isolated in als-tuning.ipynb, which compares rank and regularization settings using validation RMSE and ranking metrics. The popularity-profiles notebook exports shared training-only labels and user profiles; the history-aware calibration notebook verifies those exports against the calibration split before using them to create calibrated lists and evaluate popularity alignment and relevance. The separate UPD notebook implements the popularity-alignment evaluator and tests it with synthetic inputs; the calibration notebook also exports the prepared inputs needed to cross-check its real-data UPD results.
 
 ## Requirements
 
@@ -80,14 +85,14 @@ The notebook reads `ratings.dat` from this local directory. `movies.dat`, `users
 
 ## Baseline split design
 
-The notebook implements a pseudo-random 80/20 split within each user's rating history, using seed `42`. For a user with `n` ratings, `floor(0.8 * n)` records go to training and the remainder go to test. Rounding makes the overall proportions approximate. With MovieLens 1M's minimum of 20 ratings per user, this allocation leaves every user represented in both sets.
+The notebook implements a pseudo-random 80/20 split within each user's rating history, with configurable `splitSeed` in `{42, 43, 44}`. For a user with `n` ratings, `floor(0.8 * n)` records go to training and the remainder go to test. Rounding makes the overall proportions approximate. With MovieLens 1M's minimum of 20 ratings per user, this allocation leaves every user represented in both sets.
 
-The per-user choice is based on the [LensKit splitting guide](https://lenskit.org/stable/guide/splitting#user-based-splitting), which describes user-based holdouts as a way to control experimental conditions for individual users. The 80/20 proportion comes from the project proposal; seed `42` and the rounding rule are this project's implementation choices.
+The per-user choice is based on the [LensKit splitting guide](https://lenskit.org/stable/guide/splitting#user-based-splitting), which describes user-based holdouts as a way to control experimental conditions for individual users. The 80/20 proportion comes from the project proposal; seeds `42`, `43`, and `44` and the rounding rule are this project's implementation choices.
 The shuffle key is `xxhash64(splitSeed, userId, movieId)`, with the split seed supplied as a hash input. Within each user, ratings are ordered by that key and then movie ID to break ties. For the same input records and types, ordering is independent of input row order and Spark partitions. The notebook verifies that training and test do not overlap, reconstruct the original dataset exactly, and assign each user the intended number of training ratings.
 
 ## ALS baseline configuration
 
-The notebook trains Spark's explicit-feedback ALS on `trainingRatings`, using `userId`, `movieId`, and `rating`. The proposal's fixed baseline settings are rank `50`, `maxIter = 10`, and `regParam = 0.1`. The named values `splitSeed = 42L` and `alsSeed = 42L` separately control the data split and ALS initialization. These settings have not been tuned on validation data.
+The notebook trains Spark's explicit-feedback ALS on `trainingRatings`, using `userId`, `movieId`, and `rating`. The proposal's fixed baseline settings are rank `50`, `maxIter = 10`, and `regParam = 0.1`. The config cell sets `alsSeed = splitSeed`; both are recorded with seed-specific row counts in the run's `split-config.txt`. These settings have not been tuned on validation data.
 
 The fitted model exposes user and movie factor DataFrames. The notebook checks profile counts and dimensions and previews the first five values of selected 50-factor profiles. The model is held in the Spark session and is not exported to disk; after restarting the kernel, rerun the notebook to train it again.
 
@@ -108,7 +113,7 @@ Section 8 writes a new timestamped folder under `outputs/als-baseline/` on each 
 | `top-100-candidates/` | 100 candidates per user: 604,000 rows for the current dataset and split |
 | `top-10-baseline/`    | 10 baseline recommendations per user: 60,400 rows                       |
 
-The notebook reads both exports back and verifies exact row equality with the generated DataFrames. Each table directory contains one Parquet data part and Spark metadata. Share the complete timestamped folder. Generated outputs remain local and are excluded from Git; cloning the repository does not download these tables.
+The notebook reads both exports back and verifies exact row equality with the generated DataFrames. Each table directory contains one Parquet data part and Spark metadata. The run's `split-config.txt` records the seeds, training fraction, and exact train/test row counts. Share the complete timestamped folder. Generated outputs remain local and are excluded from Git; cloning the repository does not download these tables.
 
 Read a table in Scala/Spark by supplying its directory path:
 
@@ -122,6 +127,29 @@ baseline.orderBy("userId", "recommendationRank").show(10, truncate = false)
 
 Run [`notebooks/popularity-profiles.ipynb`](notebooks/popularity-profiles.ipynb) after the ALS baseline notebook to export the shared training-only movie labels and user profiles under `outputs/popularity-profiles/`. Then run [`notebooks/history-aware-calibration.ipynb`](notebooks/history-aware-calibration.ipynb) with the same Scala 2.12.18 / Java 17 kernel and local `data/ml-1m/ratings.dat` file. In its configuration cell, set `baselineRunId`, `profileRunId`, and `splitSeed` to match the ALS and popularity-profile runs. Run all cells in order from the repository root or `notebooks/`; the calibration notebook rebuilds the split, verifies it against the exported candidates, then performs exact two-way comparisons of its regenerated movie labels and user profiles with the shared exports before using those exports for calibration.
 
+### Run all three split seeds
+
+The three repetitions are sequential notebook runs; the Spark/Almond notebooks are not orchestrated automatically. For each seed (`42`, then `43`, then `44`), complete this exact order:
+
+1. In `als-baseline.ipynb`, set the top-level `splitSeed` to the seed and run the notebook to completion. Record the generated `outputs/als-baseline/<baselineRunId>/` folder name.
+2. In `popularity-profiles.ipynb`, set the same `splitSeed` and `baselineRunId`, then run to completion. It reads the ALS run's `split-config.txt` and checks the seed-specific train/test counts; record `<profileRunId>`.
+3. In `history-aware-calibration.ipynb`, set the same `splitSeed`, `baselineRunId`, and `profileRunId`, then run to completion and record `<calibrationRunId>`.
+4. Add or update that seed's row in the local, git-ignored `outputs/seed-runs.csv`.
+
+The seed-42 row currently records the existing matching artifacts. Its baseline export predates `split-config.txt`; rerun the baseline before using the new profile notebook, which now requires the metadata file. Seeds 43 and 44 have no completed artifacts yet, so their IDs remain blank in the CSV until those interactive runs finish. Do not copy run IDs between seeds.
+
+After all three calibration runs finish, aggregate their results and add error bars to the analysis plots:
+
+```bash
+.venv/bin/python analysis/history_group_analysis.py \
+  outputs/calibration/<seed-42-run>/results.csv \
+  outputs/calibration/<seed-43-run>/results.csv \
+  outputs/calibration/<seed-44-run>/results.csv \
+  --out analysis/three-seed
+```
+
+The output tables report metric means and standard deviations by setting and group. Matched-UPD gain is computed separately within each seed before reporting its mean, standard deviation, and the number of seeds in which history-aware calibration beats CP.
+
 The calibration notebook checks its independently regenerated labels against the shared preparation export, then uses that export. Head (`H`) contains movies up to the first 20% of rating volume; Tail (`T`) includes the movie whose cumulative share crosses 80%; the remainder is Mid (`M`). User profiles are likewise compared exactly with the preparation export before use. Users are divided into thirds by Head share (`blockbuster-focused`, `diverse`, `niche-focused`) and assigned history buckets by training-rating count: short is fewer than 50, medium is 50 through 200, and long is more than 200.
 
 Each list is selected greedily from the 100 ALS candidates by maximizing `(1 - lambda_u) * Rel(L) - lambda_u * JS(p(u), q(L))`, then presented in the original ALS order. Here `Rel(L)` is the sum of the candidates' scaled relevance scores, `p(u)` is the user's historical Head/Mid/Tail profile, and `q(L)` is the recommendation list's Head/Mid/Tail mix. `JS` is base-2 Jensen–Shannon divergence. Fixed Calibrated Popularity (CP) uses the configured `lambda` directly. History-aware calibration (HA) scales it by the user's training history, `lambda_u = lambda * min(1, n_u / N0)`. The default sweep uses `lambda` values `0.1`, `0.3`, `0.5`, `0.7`, and `0.9`; HA tests `N0` values `50`, `100`, and `200`. The notebook independently evaluates the selected exported top-10 baseline against the rebuilt split's held-out ratings and checks the `lambda = 0` engine metrics against it. Historical accuracy figures are available only as an optional regression check for their matching baseline run.
@@ -132,22 +160,24 @@ Each run creates a new `outputs/calibration/<run-id>/` folder, preserving earlie
 
 | Output | Contents |
 | --- | --- |
-| `results.csv` | Metrics for each method and setting across overall, history, and segment groups |
+| `results.csv` | Validation metrics for each method and setting across overall, history, and segment groups |
+| `selected_on_validation.csv` | Test metrics for validation-selected settings only, with selection criteria |
+| `metrics-popularity-diversity.csv` | Validation ARP, distinct-item coverage, and item-exposure Gini by setting, segment, and history bucket |
 | `manifest.txt` | Baseline and popularity-profile run IDs, split settings and row counts, popularity boundary and sort convention, calibration settings, and optional regression-check configuration |
-| `top-10-<setting>/` | Parquet recommendation lists for each setting, including the baseline, CP, and HA |
+| `top-10-<setting>/` | Test recommendation lists for settings selected on validation |
 | `inputs/` | Parquet evaluator inputs: user profiles, movie popularity groups, user segments, evaluation users, and user history |
 
 Use the complete timestamped folder to retain the results, recommendation lists, evaluator inputs, and `manifest.txt` provenance together. Generated outputs are local and excluded from version control.
 
 ## History-group analysis
 
-The Python script [`analysis/history_group_analysis.py`](analysis/history_group_analysis.py) reads the calibration notebook's `results.csv` and writes grouped tables and plots. It requires Python 3 with `pandas`, `numpy`, and `matplotlib` installed. From the repository root, pass the results file as the first argument:
+The Python script [`analysis/history_group_analysis.py`](analysis/history_group_analysis.py) accepts one calibration `results.csv` (backward compatible) or multiple seed-specific files and writes grouped tables and plots. It requires Python 3 with `pandas`, `numpy`, and `matplotlib` installed. From the repository root, pass the results file as the first argument:
 
 ```bash
 .venv/bin/python analysis/history_group_analysis.py outputs/calibration/<run-id>/results.csv
 ```
 
-Replace `<run-id>` with the timestamped calibration folder name. If the packages are not installed in `.venv`, install them with `.venv/bin/python -m pip install pandas numpy matplotlib`. If you do not use the repository's `.venv`, replace `.venv/bin/python` with your Python executable. An optional second argument selects the output directory; otherwise, outputs go in an `analysis/` directory next to `results.csv`:
+Replace `<run-id>` with the timestamped calibration folder name. If the packages are not installed in `.venv`, install them with `.venv/bin/python -m pip install pandas numpy matplotlib`. If you do not use the repository's `.venv`, replace `.venv/bin/python` with your Python executable. The legacy optional second positional argument selects the output directory; `--out` can be used with multiple input files:
 
 ```bash
 .venv/bin/python analysis/history_group_analysis.py \
@@ -155,7 +185,19 @@ Replace `<run-id>` with the timestamped calibration folder name. If the packages
   outputs/calibration/<run-id>/analysis
 ```
 
-The script writes `all_settings_by_group.csv`, `ndcg_vs_upd.png`, and `matched_upd_comparison.csv`. When history-aware and CP curves have overlapping UPD ranges, it also writes `gain_by_history_bucket.csv` and `gain_by_history_bucket.png`. The matched-UPD table estimates the history-aware minus CP NDCG gain over their shared UPD range; positive values favor history-aware calibration at comparable popularity alignment.
+The script writes mean/std `all_settings_by_group.csv`, per-seed source rows, `ndcg_vs_upd.png`, `matched_upd_by_seed.csv`, and aggregated `matched_upd_comparison.csv`. Matched-UPD gains are estimated within each seed over the shared CP/HA UPD range; positive values favor history-aware calibration at comparable popularity alignment. Error bars show one standard deviation across seeds (zero for a single input).
+
+## Popularity and aggregate diversity
+
+The calibration notebook writes `metrics-popularity-diversity.csv` for all 21 validation settings without changing the existing `results.csv` schema. ARP averages each user's mean full-training rating count across the ten validation recommendations; distinct-item coverage and exposure Gini are reported overall and by validation segment/history bucket. H/M/T shares are printed per setting. Generate the overall ARP and coverage plots against validation UPD with:
+
+```bash
+.venv/bin/python analysis/popularity_diversity_analysis.py outputs/calibration/<run-id>
+```
+
+The plot is written to `analysis/arp_coverage_vs_upd.png` by default; use `--output <path>` to choose another location.
+
+The supplementary [`accuracy-popularity-diagnostics.ipynb`](notebooks/accuracy-popularity-diagnostics.ipynb) decomposes held-out P@10 and Recall@10 into H/M/T contributions, reports the popularity mix of liked test items, and compares inverse-propensity-weighted recall and Tail-only NDCG against baseline. Its clipped inverse weights are based on training item rating counts; the notebook documents the formula and interpretation limits. Results are saved as `accuracy-popularity-diagnostics.csv` in the selected calibration run. This is an offline proxy and does not measure perceived calibration or user satisfaction; it does not change primary metric definitions or outputs.
 
 ## UPD evaluation
 
