@@ -127,7 +127,7 @@ baseline.orderBy("userId", "recommendationRank").show(10, truncate = false)
 
 ## Baseline accuracy and ALS tuning
 
-To evaluate an existing baseline without fitting or exporting a new model, open [`notebooks/accuracy-evaluation.ipynb`](notebooks/accuracy-evaluation.ipynb), set `baselineRunId` to a folder under `outputs/als-baseline/`, and run its cells in order. It rebuilds the matching split and evaluates P@10, R@10, and NDCG@10 on users with at least one held-out rating of 4 or higher. Its optional historical regression assertion is intended only for the documented seed-42 baseline.
+To evaluate an existing baseline without fitting or exporting a new model, open [`notebooks/accuracy-evaluation.ipynb`](notebooks/accuracy-evaluation.ipynb), set `baselineRunId` to a folder under `outputs/als-baseline/`, and run its cells in order. It reads `splitSeed`, `trainingFraction`, and the expected rating counts from that run's `split-config.txt`, rebuilds the matching split, and evaluates P@10, R@10, and NDCG@10 on users with at least one held-out rating of 4 or higher. Its optional historical regression assertion is intended only for the documented seed-42 baseline. Runs without `split-config.txt` are rejected, except that historical seed-42 baseline.
 
 [`notebooks/als-tuning.ipynb`](notebooks/als-tuning.ipynb) is a separate, optional experiment. It makes a per-user validation split from the outer training rows only, compares rank `{10, 20, 50, 100}` and regParam `{0.01, 0.05, 0.1, 0.2}` with maxIter 10, and reports validation RMSE, Precision@10, and NDCG@10. It writes a new timestamped `outputs/als-tuning/<run-id>/grid.csv`; it does not change the baseline model settings.
 
