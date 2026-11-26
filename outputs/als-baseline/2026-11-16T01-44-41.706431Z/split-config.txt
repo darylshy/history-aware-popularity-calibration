@@ -1,0 +1,5 @@
+splitSeed=42
+alsSeed=42
+trainingFraction=0.8
+trainingRatings=797758
+testRatings=202451

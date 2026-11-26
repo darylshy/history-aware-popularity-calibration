@@ -1,100 +1,278 @@
-import sys, os
+import argparse
 import math
+import os
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-path = sys.argv[1]
-out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(path), "analysis")
-os.makedirs(out, exist_ok=True)
-df = pd.read_csv(path)
 
-def curve(sub):
-    """UPD-sorted (upd, ndcg) points for one method family."""
-    sub = sub.sort_values("upd")
-    return sub["upd"].to_numpy(), sub["ndcg"].to_numpy()
+METRICS = ("upd", "precision", "recall", "ndcg")
+GROUP_KEYS = ("setting", "method", "lambda", "n0", "groupType", "group")
 
-def family(d, name):
-    """Rows for a method family, each including the lambda=0 baseline as the anchor."""
-    base = d[d.method == "baseline"]
+
+def parse_arguments():
+    parser = argparse.ArgumentParser(
+        description="Summarize calibration results, optionally averaging across split seeds."
+    )
+    parser.add_argument(
+        "paths",
+        nargs="+",
+        help="One or more calibration results.csv files. The legacy second positional output directory is supported.",
+    )
+    parser.add_argument("--out", help="Output directory (default: analysis beside the first input).")
+    args = parser.parse_args()
+
+    paths = list(args.paths)
+    output = args.out
+    if output is None and len(paths) == 2 and Path(paths[1]).suffix.lower() != ".csv":
+        output = paths.pop()
+    if not paths:
+        parser.error("Provide at least one results.csv path.")
+    if output is None:
+        output = str(Path(paths[0]).resolve().parent / "analysis")
+    return paths, output
+
+
+def read_split_seed(results_path, run_index, total_runs):
+    manifest_path = Path(results_path).resolve().parent / "manifest.txt"
+    if manifest_path.is_file():
+        entries = {}
+        for line in manifest_path.read_text(encoding="utf-8").splitlines():
+            if "=" in line:
+                key, value = line.split("=", 1)
+                entries[key] = value
+        if "splitSeed" not in entries:
+            raise ValueError(f"{manifest_path} does not record splitSeed.")
+        seed = entries["splitSeed"].strip()
+        if not seed.isdigit():
+            raise ValueError(f"{manifest_path} records splitSeed={entries['splitSeed']!r}, which is not an integer.")
+        return seed
+    if total_runs == 1:
+        return "single"
+    raise ValueError(
+        f"{results_path}: no manifest.txt beside this results file, so its split seed is unknown. "
+        "Multi-run aggregation requires each results.csv to sit next to a manifest.txt that records splitSeed."
+    )
+
+
+def load_runs(paths):
+    required = set(GROUP_KEYS) | set(METRICS)
+    frames = []
+    seen_seeds = set()
+    seen_paths = set()
+    for index, path in enumerate(paths):
+        resolved = Path(path).resolve()
+        if resolved in seen_paths:
+            raise ValueError(f"{path} was provided more than once; provide each seed's results.csv exactly once.")
+        seen_paths.add(resolved)
+        frame = pd.read_csv(path)
+        missing = required - set(frame.columns)
+        if missing:
+            raise ValueError(f"{path} is missing required columns: {sorted(missing)}")
+        seed = read_split_seed(path, index, len(paths))
+        if seed in seen_seeds:
+            raise ValueError(f"More than one input uses splitSeed={seed}; provide one run per seed.")
+        seen_seeds.add(seed)
+        frame["seed"] = seed
+        frames.append(frame)
+    return pd.concat(frames, ignore_index=True)
+
+
+def curve(sub, x_metric="upd", y_metric="ndcg"):
+    """Return x/y values sorted by x for interpolation or plotting."""
+    sub = sub.sort_values(x_metric)
+    return sub[x_metric].to_numpy(), sub[y_metric].to_numpy()
+
+
+def family(data, name):
+    """Rows for a method family, each including the lambda=0 baseline anchor."""
+    base = data[data.method == "baseline"]
     if name == "cp":
-        return pd.concat([base, d[d.method == "cp"]])
+        return pd.concat([base, data[data.method == "cp"]])
     n0 = int(name.split("=")[1])
-    return pd.concat([base, d[(d.method == "ha") & (d.n0 == n0)]])
+    return pd.concat([base, data[(data.method == "ha") & (data.n0 == n0)]])
 
-n0s = sorted(df.loc[df.method == "ha", "n0"].unique())
-families = ["cp"] + [f"ha N0={n}" for n in n0s]
-groups = [("all", "all")] + [("history", b) for b in ("short", "medium", "long")] \
-         + [("segment", s) for s in ("blockbuster-focused", "diverse", "niche-focused")]
 
-# --- Tables ---------------------------------------------------------------
-tbl = df[df.groupType.isin(["all", "history", "segment"])].copy()
-tbl.to_csv(os.path.join(out, "all_settings_by_group.csv"), index=False)
+def aggregate_metrics(data):
+    aggregations = {}
+    for metric in METRICS:
+        aggregations[f"{metric}_mean"] = (metric, "mean")
+        aggregations[f"{metric}_std"] = (metric, lambda values: values.std(ddof=1))
+    aggregations["seedCount"] = ("seed", "nunique")
+    summary = data.groupby(list(GROUP_KEYS), dropna=False).agg(**aggregations).reset_index()
+    std_columns = [f"{metric}_std" for metric in METRICS]
+    summary[std_columns] = summary[std_columns].fillna(0.0)
+    return summary.sort_values(["setting", "groupType", "group"]).reset_index(drop=True)
 
-# --- NDCG vs UPD curves ----------------------------------------------------
-plot_columns = min(3, len(groups))
-plot_rows = math.ceil(len(groups) / plot_columns)
-fig, axes = plt.subplots(plot_rows, plot_columns,
-                         figsize=(5 * plot_columns, 4 * plot_rows), sharex=False)
-axes = np.asarray(axes).reshape(-1)
-plotted_groups = []
-for index, (gt, g) in enumerate(groups):
-    ax = axes[index]
-    d = df[(df.groupType == gt) & (df.group == g)]
-    if d.empty:
-        raise ValueError(f"No rows found for requested plot group {gt}: {g}")
-    for fam in families:
-        sub = family(d, "cp" if fam == "cp" else fam.replace("ha ", ""))
-        x, y = curve(sub)
-        ax.plot(x, y, marker="o", label=fam)
-    ax.set_title(f"{gt}: {g}")
-    ax.set_xlabel("UPD (lower = better aligned)")
-    ax.set_ylabel("NDCG@10")
-    ax.grid(alpha=.3)
-    plotted_groups.append((gt, g))
-assert plotted_groups == groups, "Every requested group must have a plot axis."
-for ax in axes[len(groups):]:
-    ax.set_visible(False)
-axes[0].legend()
-fig.suptitle("Relevance vs popularity alignment across the lambda sweep")
-fig.tight_layout()
-fig.savefig(os.path.join(out, "ndcg_vs_upd.png"), dpi=150)
 
-# --- Matched-UPD comparison: history-aware minus CP ------------------------
-rows = []
-for gt, g in groups:
-    d = df[(df.groupType == gt) & (df.group == g)]
-    cx, cy = curve(family(d, "cp"))
-    for n0 in n0s:
-        hx, hy = curve(family(d, f"n0={n0}"))
-        lo, hi = max(cx.min(), hx.min()), min(cx.max(), hx.max())
-        if lo >= hi:
-            rows.append(dict(groupType=gt, group=g, n0=n0, overlap="none"))
-            continue
-        grid = np.linspace(lo, hi, 50)
-        diff = np.interp(grid, hx, hy) - np.interp(grid, cx, cy)
-        rows.append(dict(groupType=gt, group=g, n0=n0, overlap=f"{lo:.3f}-{hi:.3f}",
-                         mean_ndcg_gain=diff.mean(), min_gain=diff.min(), max_gain=diff.max(),
-                         share_grid_ha_better=float((diff > 0).mean())))
-matched = pd.DataFrame(rows)
-matched.to_csv(os.path.join(out, "matched_upd_comparison.csv"), index=False)
+def matched_gain_by_seed(data, groups, n0_values):
+    rows = []
+    for seed in sorted(data.seed.unique()):
+        seed_data = data[data.seed == seed]
+        for group_type, group in groups:
+            group_data = seed_data[
+                (seed_data.groupType == group_type) & (seed_data.group == group)
+            ]
+            cp_x, cp_y = curve(family(group_data, "cp"))
+            for n0 in n0_values:
+                ha_x, ha_y = curve(family(group_data, f"n0={n0}"))
+                low, high = max(cp_x.min(), ha_x.min()), min(cp_x.max(), ha_x.max())
+                row = {
+                    "seed": seed,
+                    "groupType": group_type,
+                    "group": group,
+                    "n0": n0,
+                    "overlap": "none",
+                    "mean_ndcg_gain": np.nan,
+                    "min_gain": np.nan,
+                    "max_gain": np.nan,
+                    "share_grid_ha_better": np.nan,
+                }
+                if low < high:
+                    grid = np.linspace(low, high, 50)
+                    differences = np.interp(grid, ha_x, ha_y) - np.interp(grid, cp_x, cp_y)
+                    row.update(
+                        overlap=f"{low:.3f}-{high:.3f}",
+                        mean_ndcg_gain=float(differences.mean()),
+                        min_gain=float(differences.min()),
+                        max_gain=float(differences.max()),
+                        share_grid_ha_better=float((differences > 0).mean()),
+                    )
+                rows.append(row)
+    return pd.DataFrame(rows)
 
-# --- Matched-UPD gain by history bucket (conjecture check) ------------------
-hist = matched[matched.groupType == "history"]
-if "mean_ndcg_gain" in hist:
-    pivot = hist.pivot(index="n0", columns="group", values="mean_ndcg_gain")
-    pivot = pivot.reindex(columns=[c for c in ("short", "medium", "long") if c in pivot])
-    pivot.to_csv(os.path.join(out, "gain_by_history_bucket.csv"))
-    ax = pivot.plot(kind="bar", figsize=(7, 4))
-    ax.axhline(0, color="k", lw=.8)
-    ax.set_ylabel("Mean NDCG@10 gain over CP at equal UPD")
-    ax.set_xlabel("N0")
-    ax.set_title("History-aware vs fixed CP, by history bucket")
-    plt.tight_layout()
-    plt.savefig(os.path.join(out, "gain_by_history_bucket.png"), dpi=150)
-    print("\nMean NDCG@10 gain of history-aware over CP at matched UPD:")
-    print(pivot.round(5).to_string())
-    print("\nProposal criterion: gain > 0, concentrated in the short bucket.")
-print(f"\nOutputs written to {out}")
+
+def summarize_matched_gain(per_seed):
+    valid = per_seed.dropna(subset=["mean_ndcg_gain"])
+    if valid.empty:
+        return pd.DataFrame(
+            columns=[
+                "groupType",
+                "group",
+                "n0",
+                "overlap",
+                "mean_ndcg_gain",
+                "std_ndcg_gain",
+                "seeds_ha_better",
+                "seedCount",
+            ]
+        )
+    summary = (
+        valid.groupby(["groupType", "group", "n0"], dropna=False)
+        .agg(
+            overlap=("overlap", lambda values: ";".join(sorted(set(values)))),
+            mean_ndcg_gain=("mean_ndcg_gain", "mean"),
+            std_ndcg_gain=("mean_ndcg_gain", lambda values: values.std(ddof=1)),
+            seeds_ha_better=("mean_ndcg_gain", lambda values: int((values > 0).sum())),
+            seedCount=("seed", "nunique"),
+        )
+        .reset_index()
+    )
+    summary["std_ndcg_gain"] = summary["std_ndcg_gain"].fillna(0.0)
+    return summary
+
+
+def main():
+    input_paths, output_dir = parse_arguments()
+    os.makedirs(output_dir, exist_ok=True)
+    data = load_runs(input_paths)
+    summary = aggregate_metrics(data)
+    summary.to_csv(os.path.join(output_dir, "all_settings_by_group.csv"), index=False)
+    data.to_csv(os.path.join(output_dir, "all_settings_by_group_by_seed.csv"), index=False)
+
+    n0_values = sorted(data.loc[data.method == "ha", "n0"].dropna().astype(int).unique())
+    groups = sorted(
+        {
+            (row.groupType, row.group)
+            for row in summary[["groupType", "group"]].itertuples(index=False)
+        }
+    )
+    families = ["cp"] + [f"ha N0={value}" for value in n0_values]
+
+    plot_columns = min(3, len(groups))
+    plot_rows = math.ceil(len(groups) / plot_columns)
+    figure, axes = plt.subplots(
+        plot_rows, plot_columns, figsize=(5 * plot_columns, 4 * plot_rows), sharex=False
+    )
+    axes = np.asarray(axes).reshape(-1)
+    for index, (group_type, group) in enumerate(groups):
+        axis = axes[index]
+        group_data = summary[
+            (summary.groupType == group_type) & (summary.group == group)
+        ]
+        for family_name in families:
+            subset = family(group_data, "cp" if family_name == "cp" else family_name.replace("ha ", ""))
+            subset = subset.sort_values("upd_mean")
+            axis.errorbar(
+                subset["upd_mean"],
+                subset["ndcg_mean"],
+                xerr=subset["upd_std"],
+                yerr=subset["ndcg_std"],
+                marker="o",
+                capsize=2,
+                label=family_name,
+            )
+        axis.set_title(f"{group_type}: {group}")
+        axis.set_xlabel("Mean UPD (lower = better aligned)")
+        axis.set_ylabel("Mean NDCG@10")
+        axis.grid(alpha=0.3)
+    for axis in axes[len(groups) :]:
+        axis.set_visible(False)
+    axes[0].legend()
+    figure.suptitle("Mean relevance vs popularity alignment across split seeds (error bars = 1 SD)")
+    figure.tight_layout()
+    figure.savefig(os.path.join(output_dir, "ndcg_vs_upd.png"), dpi=150)
+    plt.close(figure)
+
+    per_seed = matched_gain_by_seed(data, groups, n0_values)
+    per_seed.to_csv(os.path.join(output_dir, "matched_upd_by_seed.csv"), index=False)
+    matched = summarize_matched_gain(per_seed)
+    matched.to_csv(os.path.join(output_dir, "matched_upd_comparison.csv"), index=False)
+
+    history = matched[matched.groupType == "history"]
+    if not history.empty:
+        buckets = [name for name in ("short", "medium", "long") if name in set(history.group)]
+        n0s = sorted(history.n0.unique())
+        positions = np.arange(len(buckets))
+        width = 0.8 / max(1, len(n0s))
+        figure, axis = plt.subplots(figsize=(7, 4))
+        for index, n0 in enumerate(n0s):
+            rows = history[history.n0 == n0].set_index("group").reindex(buckets)
+            axis.bar(
+                positions + (index - (len(n0s) - 1) / 2) * width,
+                rows["mean_ndcg_gain"],
+                width,
+                yerr=rows["std_ndcg_gain"],
+                capsize=3,
+                label=f"N0={n0}",
+            )
+        axis.axhline(0, color="k", lw=0.8)
+        axis.set_xticks(positions, buckets)
+        axis.set_ylabel("Mean NDCG@10 gain over CP at equal UPD")
+        axis.set_xlabel("History bucket")
+        axis.set_title("History-aware vs fixed CP (error bars = 1 SD)")
+        axis.legend()
+        figure.tight_layout()
+        figure.savefig(os.path.join(output_dir, "gain_by_history_bucket.png"), dpi=150)
+        plt.close(figure)
+
+        print("\nMatched-UPD NDCG@10 gain by history bucket (mean +/- SD):")
+        print(
+            history[["n0", "group", "mean_ndcg_gain", "std_ndcg_gain", "seeds_ha_better", "seedCount"]]
+            .sort_values(["n0", "group"])
+            .round(5)
+            .to_string(index=False)
+        )
+        print("seeds_ha_better counts splits where the per-seed matched-UPD mean gain is positive.")
+
+    print(f"\nAveraged {data.seed.nunique()} split seed(s) from {len(input_paths)} results file(s).")
+    print(f"Outputs written to {output_dir}")
+
+
+if __name__ == "__main__":
+    main()
